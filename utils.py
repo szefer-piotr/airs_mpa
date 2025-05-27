@@ -33,10 +33,10 @@ def render_hypothesis_md(hyp: Dict[str, Any]) -> str:
     """Return a Markdown block summarising one hypothesis object."""
     md: List[str] = [f"### {hyp['title']}"]
     if hyp.get("hypothesis_refined_with_data_text"):
-        md.append(f"> {hyp['hypothesis_refined_with_data_text']}")
+        md.append(f"{hyp['hypothesis_refined_with_data_text']}")
     if hyp.get("final_hypothesis"):
-        md.append("\n> **Accepted version:**\n>")
-        md.append(f"> {hyp['final_hypothesis']}")
+        md.append("\n **Accepted version:**\n")
+        md.append(f"{hyp['final_hypothesis']}")
     return "\n".join(md)
 
 
@@ -47,6 +47,12 @@ def format_initial_assistant_msg(hyp: Dict[str, Any]) -> str:
         f"{hyp['hypothesis_refined_with_data_text']}"
     )
 
+
+def update_csv_key():
+    st.session_state.uploader_csv_key += 1
+
+def update_txt_key():
+    st.session_state.uploader_txt_key += 1
 
 # ---- Plan-text → dict helpers ------------------------------------------------
 def extract_json_fragment(text: str) -> Optional[str]:
@@ -153,7 +159,8 @@ DEFAULT_STATE: Dict[str, Any] = dict(
     approved_hypotheses=[],
     report_generated=False,
     final_report=[],
-    data = None,          # pandas.DataFrame
+    uploader_csv_key = 0,
+    uploader_txt_key = 0,
 )
 
 

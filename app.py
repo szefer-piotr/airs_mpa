@@ -10,15 +10,32 @@ st.set_page_config(
 from utils import init_state, add_green_button_css
 init_state(); add_green_button_css()
 
-st.title("Welcome to the research assistant")
-st.title("🌿 Ecological Research Assistant – Home")
-st.markdown("""
-Welcome! Use the sidebar to move through each stage:
+# # page lablels
+# home = st.Page("app.py"),
+# upload = st.Page("pages/01_Upload.py"),
+# processing = st.Page("pages/02_Processing_files.py"),
+# hypotheses_manager = st.Page("pages/03_Hypotheses_manager.py"),
+# plan_manager = st.Page("pages/04_Plan_manager.py"),
+# plan_execution = st.Page("pages/05_Plan_execution.py"),
+# report_builder = st.Page("pages/06_Report_builder.py"),
 
-1. **Upload** – load your dataset + raw hypotheses  
-2. **Processing** – automatic dataset summary & first hypothesis draft  
-3. **Hypothesis Manager** – chat & accept refined versions  
-4. **Plan Manager** – create statistical plans for each hypothesis  
-5. **Plan Execution** – run Python code & visualise results  
-6. **Report Builder** – generate a full markdown report  
-""")
+
+upload = st.Page("pages/01_Upload.py", icon="✔️") if bool(st.session_state.data_uploaded and st.session_state.hypotheses_uploaded) else st.Page("pages/01_Upload.py")
+processing = st.Page("pages/02_Processing_files.py", icon="✔️") if st.session_state.processing_done else st.Page("pages/02_Processing_files.py")
+hypotheses_manager = st.Page("pages/03_Hypotheses_manager.py", icon="✔️") if all(h["final_hypothesis"] for h in st.session_state.updated_hypotheses["assistant_response"]) else st.Page("pages/03_Hypotheses_manager.py")
+plan_manager = st.Page("pages/04_Plan_manager.py", icon="✔️") if all(
+    h.get("analysis_plan") and h.get("analysis_plan_accepted")
+    for h in st.session_state.updated_hypotheses["assistant_response"]
+) else st.Page("pages/04_Plan_manager.py")
+plan_execution = st.Page("pages/05_Plan_execution.py")
+report_builder = st.Page("pages/06_Report_builder.py", icon="✔️") if st.session_state.report_generated else st.Page("pages/06_Report_builder.py")
+
+
+selected_page = st.navigation({"Workflow": [upload, processing, hypotheses_manager, plan_manager, plan_execution, report_builder]}, position="sidebar")
+selected_page.run()
+
+
+print(f"Data and hypo: {bool(st.session_state.data_uploaded and st.session_state.hypotheses_uploaded)}")
+
+# st.rerun()
+
