@@ -53,11 +53,11 @@ hypo_obj = ensure_plan_keys(
 with st.sidebar:
     st.header("Accepted hypotheses")
     for idx, h in enumerate(st.session_state.updated_hypotheses["assistant_response"]):
-        label = f":heavy_check_mark: Hypothesis {idx+1}" if h["analysis_plan_accepted"] else f"Hypothesis {idx+1}" 
+        label = f":heavy_check_mark: Hypothesis {idx+1}" if h.get("analysis_plan_accepted",None) else f"Hypothesis {idx+1}" 
         title = label
         with st.expander(title, expanded=(current == idx)):
             st.markdown(h["final_hypothesis"], unsafe_allow_html=True)
-            if st.button("✏️ Work on this", key=f"select_hypo_{idx}"):
+            if st.button("Work on this plan", key=f"select_hypo_{idx}"):
                 st.session_state["current_hypothesis_idx"] = idx
                 st.rerun()
 
@@ -69,6 +69,7 @@ all_ready = all(
 
 if all_ready:
     st.info("Yu can now proceed to the PLAN EXECUTION stage.")
+    st.session_state.all_plans_generated = True
 
 
 st.subheader(f"Analysis Plan Manager: Hypothesis {current+1}")
@@ -158,6 +159,9 @@ if hypo_obj["analysis_plan_accepted"]:
         if st.button("Edit plan", key="edit_plan"):
             hypo_obj["analysis_plan_accepted"] = False
             st.rerun()
+        if all_ready:
+            if st.button("NEXT STAGE", key="next_stage"):
+                st.switch_page("pages/05_Plan_execution.py")
 
     # col_back, col_next = st.columns(2)
     # with col_next:

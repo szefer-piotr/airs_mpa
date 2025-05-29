@@ -14,6 +14,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import pandas as pd
 
 import streamlit as st
 from pydantic import BaseModel
@@ -151,6 +152,9 @@ DEFAULT_STATE: Dict[str, Any] = dict(
     hypotheses="",          # raw txt from upload
     data_summary="",        # dict from DataSummary assistant
     updated_hypotheses={},  # refined list incl. chat logs
+    all_hypotheses_accepted = False,
+    all_plans_generated = False,
+    all_plans_executed = False,
     # navigation helpers
     selected_hypothesis=0,
     current_hypothesis_idx=0,
@@ -161,6 +165,7 @@ DEFAULT_STATE: Dict[str, Any] = dict(
     final_report=[],
     uploader_csv_key = 0,
     uploader_txt_key = 0,
+    data_mannually_updated=False
 )
 
 
@@ -168,6 +173,52 @@ def init_state() -> None:
     """Ensure every expected key exists in `st.session_state`."""
     for k, v in DEFAULT_STATE.items():
         st.session_state.setdefault(k, v)
+
+
+def show_data_summary(summary: dict) -> None:
+    """
+    Render the `summary` dict returned by your analysis pipeline
+    in a compact, user-friendly table.
+
+    Parameters
+    ----------
+    summary : dict
+        A dict with the shape
+        {
+            "columns": {
+                <col_name>: {
+                    "column_name": str,
+                    "description": str,
+                    "type": str,
+                    "unique_value_count": int,
+                },
+                ...
+            }
+        }
+    """
+    # -------------------- 1. Flatten --------------------
+    df = (
+        pd.DataFrame(summary["columns"])   # keys become columns
+        .T                                 # flip so each col is a row
+        .rename_axis("Column")             # index label
+        .reset_index()                     #  ➜ ordinary column
+        .loc[:, ["Column", "description", "type", "unique_value_count"]]
+        .rename(
+            columns={
+                "description": "Description",
+                "type": "Type",
+                "unique_value_count": "Unique values",
+            }
+        )
+    )
+
+    # -------------------- 2. Display --------------------
+    st.dataframe(
+        df,
+        use_container_width=True,          # stretch to sidebar/main width
+        hide_index=True,
+        height=min(400, 38 * len(df) + 38) # auto-shrink if few rows
+    )
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -195,3 +246,69 @@ def embed_local_images(markdown: str, img_dir: Path | str = "images", width: int
         )
 
     return re.sub(r'[\w./\\-]+(?:\.png|\.jpg|\.jpeg|\.gif)', _replace, markdown)
+
+
+def extract_json_fragment(text: str) -> Optional[str]:
+    m = JSON_RE.search(text)
+    return m.group(0) if m else None
+
+
+
+def _mk_fallback_plan(text: str) -> Dict[str, Any]:
+    """Convert a loose Markdown plan → canonical dict."""
+    lines   = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    title   = lines[0].lstrip("# ") if lines else "Analysis Plan"
+    steps   = []
+    for ln in lines[1:]:
+        m = STEP_RE.match(ln)
+        if m:
+            steps.append({"step": m.group(1).strip()})
+    if not steps:  # fall back to one‑chunk step
+        steps = [{"step": text.strip()}]
+    return {"analyses": [{"title": title, "steps": steps}]}
+
+
+
+def safe_load_plan(raw: Any) -> Optional[Dict[str, Any]]:
+    """Return plan dict from dict / JSON / python literal / markdown."""
+    if isinstance(raw, dict):
+        return raw
+    if not raw:  # empty / None
+        return None
+
+    if isinstance(raw, str):
+        txt = raw.strip()
+        if txt.startswith("```"):
+            txt = txt.lstrip("` pythonjson").rstrip("`").strip()
+
+        # 1️⃣ json.loads with double quotes
+        try:
+            return json.loads(txt)
+        except json.JSONDecodeError:
+            # 2️⃣ ast.literal_eval for single‑quoted dicts
+            try:
+                obj = ast.literal_eval(txt)
+                if isinstance(obj, dict):
+                    return obj
+            except Exception:
+                pass
+            # 3️⃣ fragment inside markdown
+            frag = extract_json_fragment(txt)
+            if frag:
+                try:
+                    return json.loads(frag)
+                except json.JSONDecodeError:
+                    pass
+            # 4️⃣ fallback – build from markdown bullets
+            return _mk_fallback_plan(txt)
+    return None
+
+
+
+def ensure_execution_keys(h):
+    h.setdefault("plan_execution_chat_history", [])
+    return h
+
+IMG_DIR = Path("images"); IMG_DIR.mkdir(exist_ok=True)
+JSON_RE  = re.compile(r"\{[\s\S]*?\}")
+STEP_RE  = re.compile(r"^(?:\d+\.\s+|[-*+]\s+)(.+)")

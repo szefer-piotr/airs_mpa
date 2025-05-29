@@ -30,81 +30,28 @@ from instructions import (
     step_execution_chat_instructions
 )
 
-from utils import add_green_button_css
+from utils import (
+    add_green_button_css,
+    extract_json_fragment,
+    _mk_fallback_plan,
+    safe_load_plan,
+    ensure_execution_keys,
+    IMG_DIR, JSON_RE, STEP_RE
+)
 
 add_green_button_css()
 
 ASSISTANTS = get_assistants()
 
-IMG_DIR = Path("images"); IMG_DIR.mkdir(exist_ok=True)
-JSON_RE  = re.compile(r"\{[\s\S]*?\}")
-STEP_RE  = re.compile(r"^(?:\d+\.\s+|[-*+]\s+)(.+)")
-
-
-
-def extract_json_fragment(text: str) -> Optional[str]:
-    m = JSON_RE.search(text)
-    return m.group(0) if m else None
-
-
-
-def _mk_fallback_plan(text: str) -> Dict[str, Any]:
-    """Convert a loose Markdown plan → canonical dict."""
-    lines   = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    title   = lines[0].lstrip("# ") if lines else "Analysis Plan"
-    steps   = []
-    for ln in lines[1:]:
-        m = STEP_RE.match(ln)
-        if m:
-            steps.append({"step": m.group(1).strip()})
-    if not steps:  # fall back to one‑chunk step
-        steps = [{"step": text.strip()}]
-    return {"analyses": [{"title": title, "steps": steps}]}
-
-
-
-def safe_load_plan(raw: Any) -> Optional[Dict[str, Any]]:
-    """Return plan dict from dict / JSON / python literal / markdown."""
-    if isinstance(raw, dict):
-        return raw
-    if not raw:  # empty / None
-        return None
-
-    if isinstance(raw, str):
-        txt = raw.strip()
-        if txt.startswith("```"):
-            txt = txt.lstrip("` pythonjson").rstrip("`").strip()
-
-        # 1️⃣ json.loads with double quotes
-        try:
-            return json.loads(txt)
-        except json.JSONDecodeError:
-            # 2️⃣ ast.literal_eval for single‑quoted dicts
-            try:
-                obj = ast.literal_eval(txt)
-                if isinstance(obj, dict):
-                    return obj
-            except Exception:
-                pass
-            # 3️⃣ fragment inside markdown
-            frag = extract_json_fragment(txt)
-            if frag:
-                try:
-                    return json.loads(frag)
-                except json.JSONDecodeError:
-                    pass
-            # 4️⃣ fallback – build from markdown bullets
-            return _mk_fallback_plan(txt)
-    return None
-
-
-
-def ensure_execution_keys(h):
-    h.setdefault("plan_execution_chat_history", [])
-    return h
-
 
 st.title("Analysis Plan Execution")
+
+if all(
+    h.get("plan_executed")
+    for h in st.session_state.updated_hypotheses["assistant_response"]
+):
+    st.session_state.all_plans_executed = True
+    st.info("All plans are executed. You can now proceed to the REPORT BUILDER stage.")
 
 # ------------------------------------------------------------------
 # Sidebar – hypotheses
@@ -116,10 +63,10 @@ current = st.session_state.get("current_exec_idx", 0)
 with st.sidebar:
     st.header("Accepted hypotheses")
     for idx, h in enumerate(st.session_state.updated_hypotheses["assistant_response"]):
-        title = f"Hypothesis {idx+1}"
+        title = f"Hypothesis {idx+1}" if not h.get("accept_analysis_execution", None) else f":heavy_check_mark: Hypothesis {idx+1}"
         with st.expander(title, expanded=(idx==current)):
             st.markdown(h["final_hypothesis"], unsafe_allow_html=True)
-            if st.button("▶️ Run / review", key=f"select_exec_{idx}"):
+            if st.button("Work on this analysis", key=f"select_exec_{idx}"):
                 st.session_state["current_exec_idx"] = idx
                 st.rerun()
 
@@ -128,6 +75,9 @@ hypo_obj = ensure_execution_keys(
     st.session_state.updated_hypotheses["assistant_response"][current])
 
 plan_dict = safe_load_plan(hypo_obj["analysis_plan"])
+
+if hypo_obj.get("accept_analysis_execution", None):
+    st.info("This analysis plan execution has been accepted. You can still re-run it or edit it with the assistant.")
 
 if not plan_dict:
     st.error("❌ Could not parse analysis plan JSON. Please regenerate the plan in the previous stage or ask the assistant to output valid JSON.")
@@ -168,12 +118,18 @@ user_prompt = st.chat_input(
 )
 
 run_label = (
-    f"▶ Run analysis {current + 1}" if not hypo_obj["plan_execution_chat_history"] else f"Run analysis again {current}"
+    f"Run analysis {current + 1}" if not hypo_obj["plan_execution_chat_history"] else f"Run analysis again {current}"
 )
+
+
 with st.sidebar:
     st.header("Actions")
+    st.write("You can run the analysis plan or discuss it with the assistant.")
     run_label = "Run analysis" if not hypo_obj.get("plan_executed", None) else "Run analysis again"
     run_analysis = st.button(run_label, key=f"run_analysis_btn{current}")
+    if hypo_obj.get("plan_executed", None) and not hypo_obj.get("analysis_executed", None):
+        if st.button("Done", key=f"done_btn{current}"):
+            hypo_obj['analysis_executed'] = True
 
 
 
@@ -324,11 +280,11 @@ if run_analysis or user_prompt:
     st.rerun()
 
 with st.sidebar:
-    generate_report_button = st.button("Generate final report")
-    if generate_report_button:
-        st.switch_page("pages/06_Report_builder.py")
-
-# if all(
-#     h.get("analysis_plan") and h.get("analysis_plan_accepted")
-#     for h in st.session_state.updated_hypotheses["assistant_response"]
-# )
+    st.write("When finished with the analysis, you can accept it, and save its progress for the report.")
+    if hypo_obj['analysis_executed']:
+        accept_analysis_execution = st.button("Accept the analysis", key="accept_analysis_execution")
+        if accept_analysis_execution:
+            if hypo_obj.get("analysis_executed", None):
+                hypo_obj["accept_analysis_execution"] = True
+            else:
+                st.warning("Run the analysis first.")

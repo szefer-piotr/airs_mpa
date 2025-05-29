@@ -27,11 +27,6 @@ def replace_image_paths_with_html(text: str, img_dir: Path = None, width: int = 
     # Pattern to detect image paths (e.g., /some/path/image.png or just image_id if img_dir is given)
     pattern = re.compile(r'[\w./\\-]+(?:\.png|\.jpg|\.jpeg|\.gif)', re.IGNORECASE)
 
-#     ([images/file-LEiW9iuuwxivB6d1Aa9ZwK.png](images/file-LEiW9iuuwxivB6d1Aa9ZwK.png))
-# - Quadratic/lowess fits ([images/file-CVU6ou9nFsA8ijBuhTg6yv.png](images/file-CVU6ou9nFsA8ijBuhTg6yv.png))
-# - Scatterplots ([images/file-Qr31JbxCJWg9UgAtSDgQqW.png](images/file-Qr31JbxCJWg9UgAtSDgQqW.png))
-# - Diagnostic plots ([images/file-4YETFwu9yhUwzHHbQSNhzr.png](images/file-4YETFwu9yhUwzHHbQSNhzr.png), [images/file-K3juTUSyp1ekjVn4nFN197.png](images/file-K3juTUSyp1ekjVn4nFN197.png))
-
     def convert_match_to_html(match):
         path_str = match.group(0)
         try:
@@ -79,67 +74,62 @@ def build_report_prompt():
 
 
 
-def report_generation(client: OpenAI):
-    """Render the Report Generation stage and orchestrate the response call."""
+st.title("📄 Report Builder")
 
-    if st.session_state.app_state != "report_generation":
-        return
+# Sidebar – quick outline of accepted hypotheses
+with st.sidebar:
+    st.header("Refined Initial Hypotheses")
+    for idx, hyp in enumerate(st.session_state.updated_hypotheses["assistant_response"], 1):
+        st.markdown(f"**H{idx}.** {hyp['title']}")
 
-    st.title("📄 Report Builder")
+# Button to trigger report generation
+if "report_generated" not in st.session_state:
+    st.session_state.report_generated = False
+    st.session_state.report_markdown = ""
 
-    # Sidebar – quick outline of accepted hypotheses
-    with st.sidebar:
-        st.header("Refined Initial Hypotheses")
-        for idx, hyp in enumerate(st.session_state.updated_hypotheses["assistant_response"], 1):
-            st.markdown(f"**H{idx}.** {hyp['title']}")
+# if st.button("📝 Generate full report", disabled=st.session_state.report_generated):
+if st.button("📝 Generate full report"):
+    # Build a report that contains text, code, images and tables (Can I generate tables?)
+    full_prompt = build_report_prompt()
 
-    # Button to trigger report generation
-    if "report_generated" not in st.session_state:
-        st.session_state.report_generated = False
-        st.session_state.report_markdown = ""
+    if "final_report" not in st.session_state:
+            st.session_state["final_report"] = []
 
-    # if st.button("📝 Generate full report", disabled=st.session_state.report_generated):
-    if st.button("📝 Generate full report"):
-        # Build a report that contains text, code, images and tables (Can I generate tables?)
-        full_prompt = build_report_prompt()
+    with st.spinner("Synthesising report – this may take a minute …"):
+        response = client.responses.create(
+            model="gpt-4.1",
+            instructions=report_generation_instructions,
+            input=[{"role": "user", "content": full_prompt}],
+            tools=tools
+            )
+        
+        print(response.output_text)
+        
+        st.session_state["final_report"].append(response.output_text)
+        st.session_state.report_generated = True
 
-        if "final_report" not in st.session_state:
-                st.session_state["final_report"] = []
+    st.rerun()
 
-        with st.spinner("Synthesising report – this may take a minute …"):
-            response = client.responses.create(
-                model="gpt-4.1",
-                instructions=report_generation_instructions,
-                input=[{"role": "user", "content": full_prompt}],
-                tools=tools
-                )
-            
-            print(response.output_text)
-            
-            st.session_state["final_report"].append(response.output_text)
-            st.session_state.report_generated = True
+# Display the generated report
+if st.session_state.report_generated:
+    report_text_with_images = replace_image_paths_with_html(st.session_state.final_report[0])
+    st.markdown(report_text_with_images, 
+        unsafe_allow_html=True)
 
+    # Offer download as Markdown
+    st.download_button(
+        "⬇️ Download report (Markdown)",
+        st.session_state.final_report[0],
+        file_name="scientific_report.md",
+        mime="text/markdown",
+    )
+
+    # Optionally, add a next‑steps button to reset or exit
+
+with st.sidebar:
+    st.header("Actions")
+
+    if st.button("Start new session"):
+        st.session_state.clear()
+        st.switch_page("pages/01_Upload.py")
         st.rerun()
-
-    # Display the generated report
-    if st.session_state.report_generated:
-        report_text_with_images = replace_image_paths_with_html(st.session_state.final_report[0])
-        st.markdown(report_text_with_images, 
-            unsafe_allow_html=True)
-
-        # Offer download as Markdown
-        st.download_button(
-            "⬇️ Download report (Markdown)",
-            st.session_state.final_report[0],
-            file_name="scientific_report.md",
-            mime="text/markdown",
-        )
-
-        # Optionally, add a next‑steps button to reset or exit
-        if st.button("🔄 Start new session"):
-            st.session_state.clear()
-            st.rerun()
-
-
-if st.session_state.app_state == "report_generation":
-    report_generation(client)

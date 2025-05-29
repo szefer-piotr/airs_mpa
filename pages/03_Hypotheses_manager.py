@@ -25,8 +25,10 @@ all_have_history = all(
     for h in hypotheses
 )
 
-if all(h["final_hypothesis"] for h in st.session_state.updated_hypotheses["assistant_response"]):
+if all(h.get("final_hypothesis", False) for h in st.session_state.updated_hypotheses["assistant_response"]):
+    st.session_state.all_hypotheses_accepted = True
     st.info("All hypotheses are accepted. Yu can now proceed to the PLAN MANAGMENT stage.")
+
 
 if not all_have_history:
     st.markdown("⚠️ At least one hypothesis is missing chat history")
@@ -56,7 +58,7 @@ if all_have_history:
                 else:
                     st.markdown(f"> {hyp['hypothesis_refined_with_data_text']}")
                 
-                if st.button("✏️ Edit", key=f"select_{idx}"):
+                if st.button("Edit", key=f"select_{idx}"):
                     st.session_state.selected_hypothesis = idx
                     st.rerun()
 
@@ -109,14 +111,21 @@ if all_have_history:
     acc_disabled = bool(sel_hyp["final_hypothesis"])
     
     with st.sidebar:
-        st.header("Manager Actions")
+        st.header("Actions")
+        st.write("Accept the refined hypothesis or discuss it further.")
         if st.button("Keep the refined hypothesis", key="accept"):
             if len(sel_hyp["chat_history"]) > 1:
                 sel_hyp["final_hypothesis"] = sel_hyp["chat_history"][-1]["refined_hypothesis_text"]
+                st.rerun()
             else:
                 sel_hyp["final_hypothesis"] = sel_hyp["refined_hypothesis_text"]
             st.success("Hypothesis accepted!")
             st.rerun()
+        if all(h.get("final_hypothesis", False) for h in st.session_state.updated_hypotheses["assistant_response"]):
+            with st.sidebar:
+                if st.button("NEXT STAGE", key="next"):
+                    st.session_state.selected_hypothesis = 0
+                    st.switch_page("pages/04_Plan_manager.py")
 
 # ── AUTO‑ADVANCE -----------------------------------------------------------
 
