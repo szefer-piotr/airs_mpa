@@ -62,16 +62,6 @@ with st.sidebar:
                 st.rerun()
 
 
-all_ready = all(
-    h.get("analysis_plan") and h.get("analysis_plan_accepted")
-    for h in st.session_state.updated_hypotheses["assistant_response"]
-)
-
-if all_ready:
-    st.info("Yu can now proceed to the PLAN EXECUTION stage.")
-    st.session_state.all_plans_generated = True
-
-
 st.subheader(f"Analysis Plan Manager: Hypothesis {current+1}")
 st.markdown(hypo_obj["final_hypothesis"], unsafe_allow_html=True)
 
@@ -82,6 +72,7 @@ with st.sidebar:
     st.header("Actions")
     # button_label = "Generate plan" if not hypo_obj["analysis_plan_accepted"] else "Generate new plan"
     button_label = "Generate plan" if not chat_hist else "Re-generate plan"
+    
     if st.button(button_label, key="generate_plan"):
         prompt = (
             f"Here is the data summary: {st.session_state.data_summary}\n\n"
@@ -108,6 +99,16 @@ with st.sidebar:
 
         chat_hist.append({"role": "assistant", "content": resp.output_text})
 
+        all_ready = all(
+            h.get("analysis_plan") and h.get("analysis_plan_accepted")
+            for h in st.session_state.updated_hypotheses["assistant_response"]
+        )
+
+        if all_ready:
+            st.info("Yu can now proceed to the PLAN EXECUTION stage.")
+            st.session_state.all_plans_generated = True
+            st.rerun()
+            
         st.rerun()
 
 if not hypo_obj["analysis_plan_accepted"]:
@@ -159,7 +160,10 @@ if hypo_obj["analysis_plan_accepted"]:
         if st.button("Edit plan", key="edit_plan"):
             hypo_obj["analysis_plan_accepted"] = False
             st.rerun()
-        if all_ready:
+        if all(
+            h.get("analysis_plan") and h.get("analysis_plan_accepted")
+            for h in st.session_state.updated_hypotheses["assistant_response"]
+        ):
             if st.button("NEXT STAGE", key="next_stage"):
                 st.switch_page("pages/05_Plan_execution.py")
 

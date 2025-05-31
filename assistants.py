@@ -4,7 +4,8 @@ import streamlit as st
 from openai import OpenAI
 from instructions import (
     data_summary_instructions, step_execution_assistant_instructions,
-    step_execution_chat_assistant_instructions, report_generation_instructions
+    step_execution_chat_assistant_instructions, report_generation_instructions,
+    report_chat_instructions
 )
 
 load_dotenv()
@@ -39,6 +40,13 @@ def create() -> dict:
                 name="Report builder",
                 model="gpt-4.1",
                 instructions=report_generation_instructions,
+                temperature=0,
+                tools=[{"type":"code_interpreter"}],
+            ),
+            "report_chat": client.beta.assistants.create(
+                name="Report chat",
+                model="gpt-4.1",
+                instructions=report_chat_instructions,
                 temperature=0,
                 tools=[{"type":"code_interpreter"}],
             ),

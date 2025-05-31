@@ -1,148 +1,137 @@
-import streamlit as st
-import json
-from assistants import client
-from pathlib import Path
-import re
+# analysis_execution.py
+'''Streamlit page 04 – Execute analysis plans generated for each hypothesis'''
+
+from __future__ import annotations
+
 import base64
+import json
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
 
-from typing import Any, Dict, List, Optional
-import ast
-from openai import OpenAI
-
+import streamlit as st
 from openai.types.beta.assistant_stream_event import (
     ThreadRunStepCreated,
     ThreadRunStepDelta,
     ThreadRunStepCompleted,
     ThreadMessageCreated,
-    ThreadMessageDelta
+    ThreadMessageDelta,
 )
-
 from openai.types.beta.threads.text_delta_block import TextDeltaBlock
-# from openai.types.beta.threads.runs.tool_calls_step_details import ToolCallsStepDetails
 from openai.types.beta.threads.runs.code_interpreter_tool_call import (
     CodeInterpreterOutputImage,
-    CodeInterpreterOutputLogs
-    )
+    CodeInterpreterOutputLogs,
+)
 
-from assistants import create as get_assistants
+from assistants import client, create as get_assistants
 from instructions import (
     step_execution_instructions,
-    step_execution_chat_instructions
+    step_execution_chat_instructions,
 )
-
 from utils import (
     add_green_button_css,
-    extract_json_fragment,
-    _mk_fallback_plan,
-    safe_load_plan,
     ensure_execution_keys,
-    IMG_DIR, JSON_RE, STEP_RE
+    safe_load_plan,
+    IMG_DIR,
 )
 
-add_green_button_css()
-
+# ──────────────────────────  Globals  ──────────────────────────
 ASSISTANTS = get_assistants()
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
+SOULLESS_CSS = '''
+<style>
+    html, body, [class*="css"]  { font-family: Arial, sans-serif; }
+</style>
+'''
 
-st.title("Analysis Plan Execution")
+# ───────────────────────  Session helpers  ─────────────────────
+def _init_session_state() -> None:
+    defaults: Dict[str, Any] = {
+        'current_exec_idx': 0,
+        'all_plans_executed': False,
+        'analysis_running': False,
+        'images': [],
+    }
+    for k, v in defaults.items():
+        st.session_state.setdefault(k, v)
 
-if all(
-    h.get("plan_executed")
-    for h in st.session_state.updated_hypotheses["assistant_response"]
-):
-    st.session_state.all_plans_executed = True
-    st.info("All plans are executed. You can now proceed to the REPORT BUILDER stage.")
+    # Guarantee we have a thread & an images list
+    st.session_state.setdefault('thread_id',
+                                client.beta.threads.create().id)
+    st.session_state.setdefault('images', [])
 
-# ------------------------------------------------------------------
-# Sidebar – hypotheses
-# ------------------------------------------------------------------
-# Which hypothesis are we executing?
-current = st.session_state.get("current_exec_idx", 0)
+# ─────────────────────────  UI helpers  ────────────────────────
+def add_global_style() -> None:
+    st.markdown(SOULLESS_CSS, unsafe_allow_html=True)
+    add_green_button_css()
 
-
-with st.sidebar:
-    st.header("Accepted hypotheses")
-    for idx, h in enumerate(st.session_state.updated_hypotheses["assistant_response"]):
-        title = f"Hypothesis {idx+1}" if not h.get("accept_analysis_execution", None) else f":heavy_check_mark: Hypothesis {idx+1}"
-        with st.expander(title, expanded=(idx==current)):
-            st.markdown(h["final_hypothesis"], unsafe_allow_html=True)
-            if st.button("Work on this analysis", key=f"select_exec_{idx}"):
-                st.session_state["current_exec_idx"] = idx
+def sidebar_hypotheses(hyps: List[Dict[str, Any]]) -> None:
+    '''List accepted hypotheses and allow switching which plan to run.'''
+    cur = st.session_state.current_exec_idx
+    st.header('Accepted hypotheses')
+    for idx, h in enumerate(hyps):
+        label = (f':heavy_check_mark: Hypothesis {idx+1}'
+                 if h.get('analysis_executed') else f'Hypothesis {idx+1}')
+        with st.expander(label, expanded=(idx == cur)):
+            st.markdown(h['final_hypothesis'], unsafe_allow_html=True)
+            if st.button('Work on this analysis', key=f'select_exec_{idx}'):
+                st.session_state.current_exec_idx = idx
                 st.rerun()
 
+def show_transcript(chat: List[Dict[str, Any]]) -> None:
+    '''Render previous code / images / markdown from plan_execution_chat_history.'''
+    for msg in chat:
+        with st.chat_message(msg['role']):
+            if msg['role'] == 'assistant':
+                for item in msg['items']:
+                    if item['type'] == 'code_input':
+                        st.code(item['content'], language='python')
+                    elif item['type'] == 'code_output':
+                        st.code(item['content'], language='text')
+                    elif item['type'] == 'image':
+                        for html in item['content']:
+                            st.markdown(html, unsafe_allow_html=True)
+                    elif item['type'] == 'text':
+                        st.markdown(item['content'], unsafe_allow_html=True)
+            else:
+                st.markdown(msg['content'], unsafe_allow_html=True)
 
-hypo_obj = ensure_execution_keys(
-    st.session_state.updated_hypotheses["assistant_response"][current])
+def stream_assistant(
+    hypo_obj: Dict[str, Any],
+    plan_dict: Dict[str, Any],
+    user_prompt: str | None,
+) -> None:
+    '''
+    Run the analysis or a chat refinement and stream results to the UI,
+    updating `hypo_obj['plan_execution_chat_history']`.
+    '''
+    thread_id = st.session_state.thread_id
 
-plan_dict = safe_load_plan(hypo_obj["analysis_plan"])
+    # Inform the thread of the plan (or user prompt)
+    if user_prompt:
+        hypo_obj['plan_execution_chat_history'].append(
+            {'role': 'user', 'content': user_prompt},
+        )
+        client.beta.threads.messages.create(
+            thread_id=thread_id, role='user', content=user_prompt,
+        )
+        assistant_id = ASSISTANTS['analysis_chat'].id
+        instructions = step_execution_chat_instructions
+    else:
+        client.beta.threads.messages.create(
+            thread_id=thread_id,
+            role='user',
+            content=f'\n\nThe analysis plan:\n{json.dumps(plan_dict, indent=2)}',
+        )
+        assistant_id = ASSISTANTS['analysis'].id
+        instructions = step_execution_instructions
 
-if hypo_obj.get("accept_analysis_execution", None):
-    st.info("This analysis plan execution has been accepted. You can still re-run it or edit it with the assistant.")
-
-if not plan_dict:
-    st.error("❌ Could not parse analysis plan JSON. Please regenerate the plan in the previous stage or ask the assistant to output valid JSON.")
-
-# print(f"\n\nPLAN DICT\n\n:{plan_dict}")
-
-st.markdown(plan_dict['assistant_response'])
-st.markdown(plan_dict['current_plan_execution'])
-
-# Normalise stored plan to dict for future safety
-if isinstance(hypo_obj["analysis_plan"], str):
-    hypo_obj["analysis_plan"] = plan_dict
-
-
-print(f"THREAD??: {st.session_state.thread_id}")
-
-# Previous transcript ------------------------------------------------
-for msg in hypo_obj["plan_execution_chat_history"]:
-    with st.chat_message(msg["role"]):
-        if msg["role"] == "assistant":
-            for item in msg["items"]:
-                if item["type"] == "code_input":
-                    st.code(item["content"], language="python")
-                elif item["type"] == "code_output":
-                    st.code(item["content"], language="text")
-                elif item["type"] == "image":
-                    for html in item["content"]:
-                        st.markdown(html, unsafe_allow_html=True)
-                elif item["type"] == "text":
-                    st.markdown(item["content"], unsafe_allow_html=True)
-        else:
-            st.markdown(msg["content"], unsafe_allow_html=True)
-
-# Prompt & run button ------------------------------------------------
-user_prompt = st.chat_input(
-    "Discuss the plan or ask to run specific steps …",
-    key="exec_chat_input",
-)
-
-run_label = (
-    f"Run analysis {current + 1}" if not hypo_obj["plan_execution_chat_history"] else f"Run analysis again {current}"
-)
-
-
-with st.sidebar:
-    st.header("Actions")
-    st.write("You can run the analysis plan or discuss it with the assistant.")
-    run_label = "Run analysis" if not hypo_obj.get("plan_executed", None) else "Run analysis again"
-    run_analysis = st.button(run_label, key=f"run_analysis_btn{current}")
-    if hypo_obj.get("plan_executed", None) and not hypo_obj.get("analysis_executed", None):
-        if st.button("Done", key=f"done_btn{current}"):
-            hypo_obj['analysis_executed'] = True
-
-
-
-if run_analysis or user_prompt:
+    st.session_state.analysis_running = True
+    banner = st.empty()
     
-    hypo_obj["plan_executed"] = True
-
-    # Choose assistant instructions
-    client.beta.threads.messages.create(
-        thread_id=st.session_state.thread_id,
-        role="user",
-        content=f"\n\nThe analysis plan:\n{json.dumps(plan_dict, indent=2)}",
-    )
+    banner.info('Running analysis ⏳ …')
 
     # Live placeholders
     container      = st.container()
@@ -154,137 +143,169 @@ if run_analysis or user_prompt:
 
     assistant_items: List[Dict[str, Any]] = []
 
-    def ensure_slot(tp: str):
-        if not assistant_items or assistant_items[-1]["type"] != tp:
-            assistant_items.append({"type": tp, "content": "" if tp != "image" else []})
+    def ensure_slot(tp: str) -> None:
+        if not assistant_items or assistant_items[-1]['type'] != tp:
+            assistant_items.append({'type': tp,
+                                    'content': '' if tp != 'image' else []})
 
-    if run_analysis:
-        # Runs the initial analysis with specific instructions.
-        stream = client.beta.threads.runs.create(
-            thread_id    = st.session_state.thread_id,
-            assistant_id = ASSISTANTS["analysis"].id,
-            instructions = step_execution_instructions,
-            tool_choice  = {"type": "code_interpreter"},
-            stream       = True,
-        )
-
-    elif user_prompt:
-        # Responds to user, focuses on refining parts of the plan.
-        hypo_obj["plan_execution_chat_history"].append(
-            {"role": "user", "content": user_prompt}
-        )
-
-        client.beta.threads.messages.create(
-            thread_id=st.session_state.thread_id,
-            role="user",
-            content=user_prompt,
-        )
-
-        stream = client.beta.threads.runs.create(
-            thread_id    = st.session_state.thread_id,
-            assistant_id = ASSISTANTS["analysis_chat"].id,
-            instructions = step_execution_chat_instructions,
-            tool_choice  = {"type": "code_interpreter"},
-            stream       = True,
-        )
-
+    # ----- start streaming --------------------------------------------------
+    stream = client.beta.threads.runs.create(
+        thread_id=thread_id,
+        assistant_id=assistant_id,
+        instructions=instructions,
+        tool_choice={'type': 'code_interpreter'},
+        stream=True,
+    )
 
     for event in stream:
         if isinstance(event, ThreadRunStepCreated):
-            if getattr(event.data.step_details, "tool_calls", None):
-                ensure_slot("code_input")
-                code_hdr_pl.markdown("**Writing code ⏳ …**")
+            if getattr(event.data.step_details, 'tool_calls', None):
+                ensure_slot('code_input')
+                code_hdr_pl.markdown('**Writing code ⏳ …**')
 
         elif isinstance(event, ThreadRunStepDelta):
-            tc = getattr(event.data.delta.step_details, "tool_calls", None)
+            tc = getattr(event.data.delta.step_details, 'tool_calls', None)
             if tc and tc[0].code_interpreter:
-                delta = tc[0].code_interpreter.input or ""
+                delta = tc[0].code_interpreter.input or ''
                 if delta:
-                    ensure_slot("code_input")
-                    assistant_items[-1]["content"] += delta
-                    code_pl.code(assistant_items[-1]["content"], language="python")
+                    ensure_slot('code_input')
+                    assistant_items[-1]['content'] += delta
+                    code_pl.code(assistant_items[-1]['content'],
+                                 language='python')
 
         elif isinstance(event, ThreadRunStepCompleted):
-            tc = getattr(event.data.step_details, "tool_calls", None)
+            tc = getattr(event.data.step_details, 'tool_calls', None)
             if not tc:
                 continue
             outputs = tc[0].code_interpreter.outputs or []
-            if not outputs:
-                continue
-            result_hdr_pl.markdown("#### Results")
+            if outputs:
+                result_hdr_pl.markdown('#### Results')
             for out in outputs:
                 if isinstance(out, CodeInterpreterOutputLogs):
-                    ensure_slot("code_output")
-                    assistant_items[-1]["content"] += out.logs
+                    ensure_slot('code_output')
+                    assistant_items[-1]['content'] += out.logs
                     result_pl.code(out.logs)
-                
+
                 elif isinstance(out, CodeInterpreterOutputImage):
                     fid  = out.image.file_id
                     data = client.files.content(fid).read()
-                    img_path = IMG_DIR / f"{fid}.png"
+                    img_path = IMG_DIR / f'{fid}.png'
                     img_path.write_bytes(data)
 
-                    print(f"Image: {out.image.file_id} at {IMG_DIR / f'{fid}.png'} added to the thread {st.session_state.thread_id}.")
-
-                    b64 = base64.b64encode(data).decode()
                     html = (
-                        f'<p align="center"><img src="data:image/png;base64,{b64}" '
-                        f'width="600"></p>'
+                        '<p align="center">'
+                        f'<img src="data:image/png;base64,'
+                        f'{base64.b64encode(data).decode()}" width="600"></p>'
                     )
-
-                    # After saving the image data, add it to the thread
                     st.session_state.images.append(
-                        {"image_path": img_path, 
-                            "file_id": fid, 
-                            "html": html}
-                        )
-
-                    ensure_slot("image")
-                    assistant_items[-1]["content"].append(html)                        
-                    assistant_items[-1]["file_id"] = fid
-                    assistant_items[-1]["image_path"] = str(img_path)
-
-                    print(f"\n\nASSISTANT ITEM [-1]:\n\n{assistant_items}")
-
+                        {'image_path': img_path, 'file_id': fid, 'html': html},
+                    )
+                    ensure_slot('image')
+                    assistant_items[-1]['content'].append(html)
+                    assistant_items[-1]['file_id']   = fid
+                    assistant_items[-1]['image_path'] = str(img_path)
                     result_pl.markdown(html, unsafe_allow_html=True)
 
         elif isinstance(event, ThreadMessageCreated):
-            ensure_slot("text")
+            ensure_slot('text')
 
         elif isinstance(event, ThreadMessageDelta):
             blk = event.data.delta.content[0]
             if isinstance(blk, TextDeltaBlock):
-                ensure_slot("text")
-                assistant_items[-1]["content"] += blk.text.value
-                text_pl.markdown(assistant_items[-1]["content"], unsafe_allow_html=True)
+                ensure_slot('text')
+                assistant_items[-1]['content'] += blk.text.value
+                text_pl.markdown(assistant_items[-1]['content'],
+                                 unsafe_allow_html=True)
 
-    # After the run ends add the images to the thread
-    for img in st.session_state["images"]:
+    # Upload all collected images back to the thread
+    for img in st.session_state.images:
         file = client.files.create(
-                        file=open(img["image_path"], "rb"),
-                        purpose="vision"
-                    )
-
+            file=open(img['image_path'], 'rb'),
+            purpose='vision',
+        )
         client.beta.threads.messages.create(
-            thread_id=st.session_state.thread_id,
-            role="user",
-            content=[{"type": "image_file","image_file": {"file_id": file.id}}]
+            thread_id=thread_id,
+            role='user',
+            content=[{'type': 'image_file',
+                      'image_file': {'file_id': file.id}}],
         )
 
-    hypo_obj["plan_execution_chat_history"].append(
-        {"role": "assistant", "items": assistant_items}
+    hypo_obj['plan_execution_chat_history'].append(
+        {'role': 'assistant', 'items': assistant_items},
     )
-
-    hypo_obj["analysis_executed"] = True
-
+    hypo_obj['analysis_executed'] = True
+    st.session_state.analysis_running = False
+    banner.success('Analysis finished ✅')
     st.rerun()
 
-with st.sidebar:
-    st.write("When finished with the analysis, you can accept it, and save its progress for the report.")
-    if hypo_obj['analysis_executed']:
-        accept_analysis_execution = st.button("Accept the analysis", key="accept_analysis_execution")
-        if accept_analysis_execution:
-            if hypo_obj.get("analysis_executed", None):
-                hypo_obj["accept_analysis_execution"] = True
-            else:
-                st.warning("Run the analysis first.")
+# ─────────────────────────  Main page  ─────────────────────────
+def main() -> None:                              # noqa: C901 – big but clear
+    _init_session_state()
+    add_global_style()
+
+    hyps = st.session_state.updated_hypotheses['assistant_response']
+    cur  = st.session_state.current_exec_idx
+    hypo_obj = ensure_execution_keys(hyps[cur])
+    plan_dict = safe_load_plan(hypo_obj['analysis_plan'])
+
+    st.title('Analysis plan execution')
+
+    # ---------- banners --------------------------------------------------
+    if st.session_state.analysis_running:
+        st.info('Analysis is running …')
+
+
+    if hypo_obj.get('accept_analysis_execution'):
+        st.info('This analysis execution has been accepted. You may still re-run or discuss it.')
+
+    # ---------- sidebar (hypothesis list + actions) ----------------------
+    with st.sidebar:
+        sidebar_hypotheses(hyps)
+
+    if not plan_dict:
+        st.error('❌ Could not parse analysis-plan JSON. Regenerate it in the previous stage.')
+        st.stop()
+
+    # ---------- show plan summary ---------------------------------------
+    st.markdown(plan_dict['assistant_response'])
+    st.markdown(plan_dict['current_plan_execution'])
+
+    # Transcript of previous exchanges
+    show_transcript(hypo_obj['plan_execution_chat_history'])
+
+    # ---------- user interaction ----------------------------------------
+    prompt = st.chat_input('Discuss the plan or ask to run specific steps …',
+                           key='exec_chat_input')
+
+    with st.sidebar:
+        st.header('Actions')
+        run_clicked = st.button(
+            'Run analysis' if not hypo_obj.get('analysis_executed')
+            else 'Run analysis again',
+            key=f'run_analysis_btn_{cur}',
+            disabled=st.session_state.analysis_running,
+        )
+        if hypo_obj.get('analysis_executed'):
+            done_clicked = st.button('Done', key=f'done_btn_{cur}')
+            if done_clicked:
+                hypo_obj['accept_analysis_execution'] = True
+                st.rerun()
+
+    # ---------- handle run / chat ---------------------------------------
+    if run_clicked or prompt:
+        hypo_obj['plan_executed'] = True
+        stream_assistant(hypo_obj, plan_dict, prompt)
+    
+        if all(h.get('analysis_executed') for h in hyps):
+            st.session_state.all_plans_executed = True
+            st.success('All plans have been executed. You can proceed to report generation.')
+            st.rerun()
+
+    # ---------- next stage button ---------------------------------------
+    with st.sidebar:
+        if st.session_state.get('all_plans_executed'):
+            if st.button('NEXT → Report builder'):
+                st.switch_page('pages/06_Report_builder.py')
+
+if __name__ == '__main__':
+    main()

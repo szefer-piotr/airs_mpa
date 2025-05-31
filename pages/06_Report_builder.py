@@ -1,135 +1,282 @@
-import streamlit as st
+# report_builder.py
+'''Streamlit page 05 – Build and refine the final scientific report'''
 
-from pathlib import Path
+from __future__ import annotations
+
 import base64
 import re
-from assistants import client
-from instructions import report_generation_instructions
-from openai import OpenAI
+from pathlib import Path
+from typing import Any, Dict, List
 
-from utils import add_green_button_css
-add_green_button_css()
+import streamlit as st
+from openai.types.beta.assistant_stream_event import (
+    ThreadRunStepCreated,
+    ThreadRunStepDelta,
+    ThreadRunStepCompleted,
+    ThreadMessageCreated,
+    ThreadMessageDelta,
+)
+from openai.types.beta.threads.text_delta_block import TextDeltaBlock
+from openai.types.beta.threads.runs.code_interpreter_tool_call import (
+    CodeInterpreterOutputImage,
+    CodeInterpreterOutputLogs,
+)
 
-# STAGE 4. REPORT GENERATION
-def replace_image_paths_with_html(text: str, img_dir: Path = None, width: int = 600) -> str:
-    """
-    Find image paths in a string, read those images, convert them to base64 HTML, 
-    and replace the paths in the string with HTML <img> tags.
+from assistants import client, create as get_assistants
+from instructions import report_generation_instructions, report_chat_instructions
+from utils import add_green_button_css, IMG_DIR
 
-    Parameters:
-    - text: The input string potentially containing image paths.
-    - img_dir: Optional base directory to resolve relative file names (used for file IDs).
-    - width: Width of the embedded image in pixels.
+# ──────────────────────────  Globals  ──────────────────────────
+ASSISTANTS = get_assistants()
+SOULLESS_CSS = '''
+<style>
+    html, body, [class*="css"]  { font-family: Arial, sans-serif; }
+</style>
+'''
+TOOLS = [{'type': 'web_search_preview'}]
 
-    Returns:
-    - Modified string with image paths replaced by embedded HTML <img> tags.
-    """
-    # Pattern to detect image paths (e.g., /some/path/image.png or just image_id if img_dir is given)
-    pattern = re.compile(r'[\w./\\-]+(?:\.png|\.jpg|\.jpeg|\.gif)', re.IGNORECASE)
+# ───────────────────────  Session helpers  ─────────────────────
+def _init_session_state() -> None:
+    defaults: Dict[str, Any] = {
+        'report_generated':      False,
+        'final_report':          [],
+        'report_chat_history':   [],
+        'images':                [],
+        'thread_id':             client.beta.threads.create().id,
+        'report_running':        False,
+    }
+    for k, v in defaults.items():
+        st.session_state.setdefault(k, v)
 
-    def convert_match_to_html(match):
+# ────────────────────────  Styling  ───────────────────────────
+def add_global_style() -> None:
+    st.markdown(SOULLESS_CSS, unsafe_allow_html=True)
+    add_green_button_css()
+
+# ──────────────────────  Utility funcs  ───────────────────────
+def replace_image_paths_with_html(text: str,
+                                  img_dir: Path | None = None,
+                                  width: int = 600) -> str:
+    pattern = re.compile(r'[\w./\\-]+(?:\.png|\.jpg|\.jpeg|\.gif)',
+                         re.IGNORECASE)
+
+    def _to_html(match):
         path_str = match.group(0)
         try:
-            # If img_dir is provided and path_str is not an absolute path, treat it as a file_id
-            image_path = Path(path_str)
-            if img_dir and not image_path.is_absolute():
-                image_path = img_dir / path_str
+            img_path = Path(path_str)
+            if img_dir and not img_path.is_absolute():
+                img_path = img_dir / path_str
+            if not img_path.exists():
+                return f'[Image not found: {img_path}]'
+            b64 = base64.b64encode(img_path.read_bytes()).decode()
+            return (f'<p align="center"><img src="data:image/png;base64,{b64}" '
+                    f'width="{width}"></p>')
+        except Exception as exc:                  # noqa: BLE001
+            return f'[Error loading image: {exc}]'
 
-            if not image_path.exists():
-                return f"[Image not found: {image_path}]"
+    return pattern.sub(_to_html, text)
 
-            data = image_path.read_bytes()
-            b64 = base64.b64encode(data).decode()
-            return (
-                f'<p align="center"><img src="data:image/png;base64,{b64}" '
-                f'width="{width}"></p>'
-            )
-        except Exception as e:
-            return f"[Error loading image: {e}]"
-
-    # Replace each image path with its base64 HTML equivalent
-    return pattern.sub(convert_match_to_html, text)
-
-
-
-tools = [{"type": "web_search_preview"}]
-
-def build_report_prompt():
-    report_prompt = []
-    for idx, hyp in enumerate(st.session_state.updated_hypotheses['assistant_response']):
-        report_prompt.append(hyp["title"])
+def build_report_prompt() -> str:
+    prompt_parts: List[str] = []
+    for hyp in st.session_state.updated_hypotheses['assistant_response']:
+        prompt_parts.append(hyp['title'])
         for msg in hyp['plan_execution_chat_history']:
-            # print(f"\n\nThe message:\n\n {msg.keys()}")
-            if "items" in msg:
-                for item in msg["items"]:
-                    # Exclude outputs!!!
-                    if item["type"] == "image":
-                        report_prompt.append(item["file_id"])
-                        report_prompt.append(str(item["image_path"]))
+            if 'items' in msg:
+                for item in msg['items']:
+                    if item['type'] == 'image':
+                        prompt_parts.append(item['file_id'])
+                        prompt_parts.append(str(item['image_path']))
                     else:
-                        report_prompt.append(item["content"])
-            elif "content" in msg:
-                report_prompt.append(msg["content"])
-    return " ".join(report_prompt)
+                        prompt_parts.append(item['content'])
+            elif 'content' in msg:
+                prompt_parts.append(msg['content'])
+    return ' '.join(prompt_parts)
 
+def display_report() -> None:
+    md = st.session_state.final_report[0]
+    st.markdown(replace_image_paths_with_html(md, IMG_DIR),
+                unsafe_allow_html=True)
 
+    st.download_button('⬇️ Download report (Markdown)',
+                       md,
+                       file_name='scientific_report.md',
+                       mime='text/markdown')
 
-st.title("📄 Report Builder")
+def render_chat_history() -> None:
+    for msg in st.session_state.report_chat_history:
+        with st.chat_message(msg['role']):
+            if msg['role'] == 'assistant':
+                for item in msg['items']:
+                    tp = item['type']
+                    if tp == 'code_input':
+                        st.code(item['content'], language='python')
+                    elif tp == 'code_output':
+                        st.code(item['content'], language='text')
+                    elif tp == 'image':
+                        for html in item['content']:
+                            st.markdown(html, unsafe_allow_html=True)
+                    elif tp == 'text':
+                        st.markdown(item['content'], unsafe_allow_html=True)
+            else:
+                st.markdown(msg['content'], unsafe_allow_html=True)
 
-# Sidebar – quick outline of accepted hypotheses
-with st.sidebar:
-    st.header("Refined Initial Hypotheses")
-    for idx, hyp in enumerate(st.session_state.updated_hypotheses["assistant_response"], 1):
-        st.markdown(f"**H{idx}.** {hyp['title']}")
+# ─────────────────────  Assistant streaming  ──────────────────
+def stream_report_chat(user_prompt: str) -> None:
+    thread_id = st.session_state.thread_id
+    st.session_state.report_chat_history.append(
+        {'role': 'user', 'content': user_prompt},
+    )
+    client.beta.threads.messages.create(thread_id=thread_id,
+                                        role='user',
+                                        content=user_prompt)
 
-# Button to trigger report generation
-if "report_generated" not in st.session_state:
-    st.session_state.report_generated = False
-    st.session_state.report_markdown = ""
+    banner = st.empty()
+    banner.info('Assistant is thinking ⏳ …')
 
-# if st.button("📝 Generate full report", disabled=st.session_state.report_generated):
-if st.button("📝 Generate full report"):
-    # Build a report that contains text, code, images and tables (Can I generate tables?)
-    full_prompt = build_report_prompt()
+    container      = st.container()
+    code_hdr_pl    = container.empty()
+    code_pl        = container.empty()
+    result_hdr_pl  = container.empty()
+    result_pl      = container.empty()
+    text_pl        = container.empty()
 
-    if "final_report" not in st.session_state:
-            st.session_state["final_report"] = []
+    assistant_items: List[Dict[str, Any]] = []
 
-    with st.spinner("Synthesising report – this may take a minute …"):
-        response = client.responses.create(
-            model="gpt-4.1",
-            instructions=report_generation_instructions,
-            input=[{"role": "user", "content": full_prompt}],
-            tools=tools
-            )
-        
-        print(response.output_text)
-        
-        st.session_state["final_report"].append(response.output_text)
-        st.session_state.report_generated = True
+    def ensure_slot(tp: str) -> None:
+        if not assistant_items or assistant_items[-1]['type'] != tp:
+            assistant_items.append({'type': tp,
+                                    'content': '' if tp != 'image' else []})
 
-    st.rerun()
-
-# Display the generated report
-if st.session_state.report_generated:
-    report_text_with_images = replace_image_paths_with_html(st.session_state.final_report[0])
-    st.markdown(report_text_with_images, 
-        unsafe_allow_html=True)
-
-    # Offer download as Markdown
-    st.download_button(
-        "⬇️ Download report (Markdown)",
-        st.session_state.final_report[0],
-        file_name="scientific_report.md",
-        mime="text/markdown",
+    stream = client.beta.threads.runs.create(
+        thread_id    = thread_id,
+        assistant_id = ASSISTANTS['report_chat'].id,
+        instructions = report_chat_instructions,
+        tool_choice  = {'type': 'code_interpreter'},
+        stream       = True,
     )
 
-    # Optionally, add a next‑steps button to reset or exit
+    for event in stream:
+        if isinstance(event, ThreadRunStepCreated):
+            if getattr(event.data.step_details, 'tool_calls', None):
+                ensure_slot('code_input')
+                code_hdr_pl.markdown('**Writing code ⏳ …**')
 
-with st.sidebar:
-    st.header("Actions")
+        elif isinstance(event, ThreadRunStepDelta):
+            tc = getattr(event.data.delta.step_details, 'tool_calls', None)
+            if tc and tc[0].code_interpreter:
+                delta = tc[0].code_interpreter.input or ''
+                if delta:
+                    ensure_slot('code_input')
+                    assistant_items[-1]['content'] += delta
+                    code_pl.code(assistant_items[-1]['content'],
+                                 language='python')
 
-    if st.button("Start new session"):
-        st.session_state.clear()
-        st.switch_page("pages/01_Upload.py")
+        elif isinstance(event, ThreadRunStepCompleted):
+            tc = getattr(event.data.step_details, 'tool_calls', None)
+            if not tc:
+                continue
+            outputs = tc[0].code_interpreter.outputs or []
+            if outputs:
+                result_hdr_pl.markdown('#### Results')
+            for out in outputs:
+                if isinstance(out, CodeInterpreterOutputLogs):
+                    ensure_slot('code_output')
+                    assistant_items[-1]['content'] += out.logs
+                    result_pl.code(out.logs)
+                elif isinstance(out, CodeInterpreterOutputImage):
+                    fid  = out.image.file_id
+                    data = client.files.content(fid).read()
+                    img_path = IMG_DIR / f'{fid}.png'
+                    img_path.write_bytes(data)
+                    html = (
+                        '<p align="center">'
+                        f'<img src="data:image/png;base64,'
+                        f'{base64.b64encode(data).decode()}" width="600"></p>'
+                    )
+                    assistant_items[-1]['content'].append(html)
+                    result_pl.markdown(html, unsafe_allow_html=True)
+
+        elif isinstance(event, ThreadMessageCreated):
+            ensure_slot('text')
+
+        elif isinstance(event, ThreadMessageDelta):
+            blk = event.data.delta.content[0]
+            if isinstance(blk, TextDeltaBlock):
+                ensure_slot('text')
+                assistant_items[-1]['content'] += blk.text.value
+                text_pl.markdown(assistant_items[-1]['content'],
+                                 unsafe_allow_html=True)
+
+    st.session_state.report_chat_history.append(
+        {'role': 'assistant', 'items': assistant_items},
+    )
+    banner.success('Assistant response finished ✅')
+    st.rerun()
+
+# ─────────────────────────  Main page  ─────────────────────────
+def main() -> None:                              # noqa: C901 – large but clear
+    _init_session_state()
+    add_global_style()
+
+    st.title('📄 Report builder')
+
+    # ---------- Sidebar --------------------------------------------------
+    with st.sidebar:
+        st.header('Refined initial hypotheses')
+        for i, hyp in enumerate(
+                st.session_state.updated_hypotheses['assistant_response'], 1):
+            st.markdown(f'**H{i}.** {hyp["title"]}')
+
+        st.divider()
+        st.header('Actions')
+
+        gen_clicked = st.button(
+            '📝 Generate full report',
+            disabled=st.session_state.report_running,
+        )
+        
+        if st.session_state.get("report_generated", False):
+            reset_clicked = st.button('Start new session')
+            # ---------- Reset session -------------------------------------------
+            if reset_clicked:
+                st.session_state.clear()
+                st.switch_page('pages/01_Upload.py')
+                st.rerun()
+
+    # ---------- Generate report -----------------------------------------
+    if gen_clicked:
+        st.session_state.report_running = True
+        banner = st.empty()
+        banner.info('Synthesising report – this may take a minute …')
+
+        full_prompt = build_report_prompt()
+        rsp = client.responses.create(
+            model='gpt-4.1',
+            instructions=report_generation_instructions,
+            input=[{'role': 'user', 'content': full_prompt}],
+            tools=TOOLS,
+        )
+
+        st.session_state.final_report = [rsp.output_text]
+        st.session_state.report_generated = True
+        st.session_state.report_running = False
+        banner.success('Report generated ✅')
         st.rerun()
+
+    
+
+    # ---------- Show report & chat --------------------------------------
+    if st.session_state.report_generated:
+        display_report()
+        st.divider()
+        st.subheader('💬 Discuss & refine the report')
+
+        render_chat_history()
+
+        prompt = st.chat_input('Ask for corrections, extra analyses, images …',
+                               key='report_chat_input')
+        if prompt:
+            stream_report_chat(prompt)
+
+if __name__ == '__main__':
+    main()
