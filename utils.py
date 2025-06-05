@@ -312,3 +312,41 @@ def ensure_execution_keys(h):
 IMG_DIR = Path("images"); IMG_DIR.mkdir(exist_ok=True)
 JSON_RE  = re.compile(r"\{[\s\S]*?\}")
 STEP_RE  = re.compile(r"^(?:\d+\.\s+|[-*+]\s+)(.+)")
+
+
+def replace_file_ids_with_html(text: str) -> str:
+    """
+    Scans the given text for file IDs of the form "file-<alphanumeric>"
+    and replaces each occurrence with an <img> tag whose source is the
+    corresponding base64‐encoded image bytes stored in st.session_state.images.
+
+    Assumes:
+    - st.session_state.images is a list of dicts, each with keys:
+        - "fid": the file ID string (e.g., "file-KsuFnyXE1Upst5o1GAHGip")
+        - "img_bytes": raw bytes of a PNG or JPG image
+    - If a matched file ID has no entry in st.session_state.images, it is left unchanged.
+
+    Returns:
+        The input text with every recognized file ID replaced by centered <img> HTML.
+    """
+    # Prebuild a lookup from fid → base64‐encoded HTML snippet
+    fid_to_html = {}
+    for img_dict in st.session_state.images:
+        fid = img_dict.get("fid")
+        img_bytes = img_dict.get("img_bytes")
+        if fid and img_bytes:
+            b64 = base64.b64encode(img_bytes).decode("utf-8")
+            img_html = f'<p align="center"><img src="data:image/png;base64,{b64}" width="600"></p>'
+            fid_to_html[fid] = img_html
+
+    # Define a regex to find substrings like "file-<alphanumeric>"
+    pattern = re.compile(r"\bfile-[A-Za-z0-9]+\b")
+
+    # Replacement function: if we have HTML for this fid, return it; else, leave unchanged
+    def _replace_match(match: re.Match) -> str:
+        fid = match.group(0)
+        return fid_to_html.get(fid, fid)
+
+    # Substitute all occurrences in the text
+    replaced_text = pattern.sub(_replace_match, text)
+    return replaced_text

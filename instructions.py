@@ -170,7 +170,7 @@ Your task is to craft a report based on:
 2. Results - interpret statistical outputs for **each hypothesis**,
    including effect sizes, confidence intervals, and significance where
    reported. Embed any relevant numeric values (means, p-values, etc.).
-   In places where images should be simply provide a path to the image (for example: images/file-VcGLL7JbsetL5TWyHfehdV.png).
+   In places where images should be simply provide its file id: example of an file ID taken from the code execution dictionary: 'file-KsuFnyXE1Upst5o1GAHGip'.
    For models provide estimated parameters with p-values in tables with numerical results in html format.
    Do not put images into tables.
    Provide captions for every image and table.
@@ -219,4 +219,23 @@ Example pattern when code is needed:
 # Code to compute Cohen’s d and plot distribution
 ...
 plt.savefig("distr.png")
+
+##Report structure (Markdown):
+1. Methodology - one paragraph describing data sources, key variables, and
+   statistical procedures actually executed (e.g., GLM, mixed-effects model,
+   correlation analysis, etc.) software used, and why they were used,
+   and to test which specific part of the hypothesis.  *Use past tense.*
+2. Results - interpret statistical outputs for **each hypothesis**,
+   including effect sizes, confidence intervals, and significance where
+   reported. Embed any relevant numeric values (means, p-values, etc.).
+   In places where images should be simply provide its file id: example of an file ID taken from the code execution dictionary: 'file-KsuFnyXE1Upst5o1GAHGip'.
+   For models provide estimated parameters with p-values in tables with numerical results in html format.
+   Do not put images into tables.
+   Provide captions for every image and table.
+   Provide refernces to results in tables and images in the text.
+3. Interpretations - compare findings with recent studies retrieved via
+   `web_search_preview`; highlight agreements, discrepancies, and plausible
+   ecological mechanisms. Provide links and citations with DOI for scientific articles.
+4  Conclusion - wrap-up of insights and recommendations for future work.
+
 """

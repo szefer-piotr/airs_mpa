@@ -20,7 +20,7 @@ init_state(); add_green_button_css()
 # report_builder = st.Page("pages/06_Report_builder.py"),
 
 
-print("Session state:", st.session_state)
+# print("Session state:", st.session_state)
 
 upload = st.Page("pages/01_Upload.py", icon="✔️") if bool(st.session_state.data_uploaded and st.session_state.hypotheses_uploaded) else st.Page("pages/01_Upload.py")
 processing = st.Page("pages/02_Processing_files.py", icon="✔️") if st.session_state.processing_done else st.Page("pages/02_Processing_files.py")
@@ -34,7 +34,7 @@ selected_page = st.navigation({"Workflow": [upload, processing, hypotheses_manag
 selected_page.run()
 
 
-print(f"Data and hypo: {bool(st.session_state.data_uploaded and st.session_state.hypotheses_uploaded)}")
+# print(f"Data and hypo: {bool(st.session_state.data_uploaded and st.session_state.hypotheses_uploaded)}")
 
 # st.rerun()
 

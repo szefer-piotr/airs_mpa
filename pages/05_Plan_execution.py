@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -33,6 +34,7 @@ from utils import (
     ensure_execution_keys,
     safe_load_plan,
     IMG_DIR,
+    replace_file_ids_with_html
 )
 
 # ──────────────────────────  Globals  ──────────────────────────
@@ -92,7 +94,7 @@ def show_transcript(chat: List[Dict[str, Any]]) -> None:
                         st.code(item['content'], language='text')
                     elif item['type'] == 'image':
                         for html in item['content']:
-                            st.markdown(html, unsafe_allow_html=True)
+                            st.markdown(replace_file_ids_with_html(html), unsafe_allow_html=True)
                     elif item['type'] == 'text':
                         st.markdown(item['content'], unsafe_allow_html=True)
             else:
@@ -187,23 +189,20 @@ def stream_assistant(
                     result_pl.code(out.logs)
 
                 elif isinstance(out, CodeInterpreterOutputImage):
-                    fid  = out.image.file_id
-                    data = client.files.content(fid).read()
-                    img_path = IMG_DIR / f'{fid}.png'
-                    img_path.write_bytes(data)
-
-                    html = (
-                        '<p align="center">'
-                        f'<img src="data:image/png;base64,'
-                        f'{base64.b64encode(data).decode()}" width="600"></p>'
-                    )
+                    fid = out.image.file_id          
                     st.session_state.images.append(
-                        {'image_path': img_path, 'file_id': fid, 'html': html},
+                        {"fid": fid, "caption": f"Figure {len(st.session_state.images)+1}",
+                         "img_bytes": client.files.content(fid).read()}
                     )
-                    ensure_slot('image')
-                    assistant_items[-1]['content'].append(html)
-                    assistant_items[-1]['file_id']   = fid
-                    assistant_items[-1]['image_path'] = str(img_path)
+
+                    print(f'\n\nImage file ID:\n\n{fid}')
+
+                    img_bytes = client.files.content(fid).read()
+                    b64 = base64.b64encode(img_bytes).decode()
+                    html = f'<p align="center"><img src="data:image/png;base64,{b64}" width="600"></p>'
+                    ensure_slot("image")
+                    assistant_items[-1]["content"].append(fid)
+                    
                     result_pl.markdown(html, unsafe_allow_html=True)
 
         elif isinstance(event, ThreadMessageCreated):
@@ -218,17 +217,19 @@ def stream_assistant(
                                  unsafe_allow_html=True)
 
     # Upload all collected images back to the thread
-    for img in st.session_state.images:
-        file = client.files.create(
-            file=open(img['image_path'], 'rb'),
-            purpose='vision',
-        )
-        client.beta.threads.messages.create(
-            thread_id=thread_id,
-            role='user',
-            content=[{'type': 'image_file',
-                      'image_file': {'file_id': file.id}}],
-        )
+    # for img in st.session_state.images:
+    #     file = client.files.create(
+    #         file=img['img_bytes'],
+    #         purpose='vision',
+    #     )
+    #     client.beta.threads.messages.create(
+    #         thread_id=thread_id,
+    #         role='user',
+    #         content=[{'type': 'image_file',
+    #                   'image_file': {'file_id': file.id}}],
+    #     )
+
+    print(f"\n\nAssistant items:\n\n{assistant_items}")
 
     hypo_obj['plan_execution_chat_history'].append(
         {'role': 'assistant', 'items': assistant_items},
@@ -283,7 +284,7 @@ def main() -> None:                              # noqa: C901 – big but clear
             'Run analysis' if not hypo_obj.get('analysis_executed')
             else 'Run analysis again',
             key=f'run_analysis_btn_{cur}',
-            disabled=st.session_state.analysis_running,
+            # disabled=st.session_state.analysis_running,
         )
         if hypo_obj.get('analysis_executed'):
             done_clicked = st.button('Done', key=f'done_btn_{cur}')
