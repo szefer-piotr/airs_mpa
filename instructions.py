@@ -170,7 +170,7 @@ Your task is to craft a report based on:
 2. Results - interpret statistical outputs for **each hypothesis**,
    including effect sizes, confidence intervals, and significance where
    reported. Embed any relevant numeric values (means, p-values, etc.).
-   In places where images should be simply provide its file id: example of an file ID taken from the code execution dictionary: 'file-KsuFnyXE1Upst5o1GAHGip'.
+   In places where images should be simply provide its file id: example of an file ID taken from the code execution dictionary: file-KsuFnyXE1Upst5o1GAHGip.
    For models provide estimated parameters with p-values in tables with numerical results in html format.
    Do not put images into tables.
    Provide captions for every image and table.
@@ -228,7 +228,7 @@ plt.savefig("distr.png")
 2. Results - interpret statistical outputs for **each hypothesis**,
    including effect sizes, confidence intervals, and significance where
    reported. Embed any relevant numeric values (means, p-values, etc.).
-   In places where images should be simply provide its file id: example of an file ID taken from the code execution dictionary: 'file-KsuFnyXE1Upst5o1GAHGip'.
+   In places where images should be simply provide its file id: example of an file ID taken from the code execution dictionary: file-KsuFnyXE1Upst5o1GAHGip.
    For models provide estimated parameters with p-values in tables with numerical results in html format.
    Do not put images into tables.
    Provide captions for every image and table.
