@@ -1,4 +1,5 @@
 python-dotenv
-openai==1.68.2
 pandas
 streamlit > 1.43
+openai 
+asyncio
