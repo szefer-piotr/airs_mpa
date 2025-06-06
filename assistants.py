@@ -17,21 +17,21 @@ def create() -> dict:
         st.session_state.assistants = {
             "data_summary": client.beta.assistants.create(
                 name="Data summariser",
-                model="gpt-4o-2024-08-06",
+                model="gpt-4.1",
                 instructions=data_summary_instructions,
                 temperature=0,
                 tools=[{"type":"code_interpreter"}],
             ),
             "analysis": client.beta.assistants.create(
                 name="Analysis",
-                model="gpt-4o",
+                model="gpt-4.1",
                 instructions=step_execution_assistant_instructions,
                 tools=[{"type":"code_interpreter"}],
                 temperature=0,
             ),
             "analysis_chat": client.beta.assistants.create(
                 name="Analysis chat",
-                model="gpt-4o",
+                model="gpt-4.1",
                 instructions=step_execution_chat_assistant_instructions,
                 tools=[{"type":"code_interpreter"}],
                 temperature=0,

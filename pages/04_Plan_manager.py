@@ -1,176 +1,219 @@
-import streamlit as st
+# pages/04_Plan_manager.py
+# ───────────────────────────────────────────────────────────────────────────
+"""Stage 4 – Analysis-plan manager."""
+
+from __future__ import annotations
+
+# ── std-lib ────────────────────────────────────────────────────────────────
 import json
+import logging
+from typing import Dict, List
 
-from openai import OpenAI
+# ── 3rd-party ──────────────────────────────────────────────────────────────
+import streamlit as st
+
+# ── app modules ────────────────────────────────────────────────────────────
 from assistants import client
-
 from instructions import (
     analyses_step_generation_instructions,
-    analyses_step_chat_instructions
+    analyses_step_chat_instructions,
+)
+from schemas import plan_generation_response_schema
+from utils import (
+    init_state,
+    add_green_button_css,
+    add_modern_font_css,
 )
 
-from utils import add_green_button_css
+# ───────────────────────── logging ────────────────────────────────────────
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
-add_green_button_css()
+# ═══════════════════════════  Styling helpers  ════════════════════════════
+def add_sidebar_button_styles() -> None:
+    """Transparent sidebar buttons; the *primary* one (NEXT) is green."""
+    st.markdown(
+        """
+        <style>
+            /* default: outline buttons in the sidebar */
+            div[data-testid="stSidebar"] button {
+                background: transparent !important;
+                color: var(--text-color) !important;
+                border: 1px solid var(--text-color) !important;
+            }
+            /* the one we mark as 'primary' (NEXT) */
+            div[data-testid="stSidebar"] button[data-baseweb="button-primary"] {
+                background: #00A86B !important;
+                color: #fff !important;
+                border: none !important;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-from schemas import plan_generation_response_schema
 
-# STAGE 3 ANALYSIS PLAN MANAGER
 
+# ═══════════════════════════  Helper functions  ═══════════════════════════
 def pretty_markdown_plan(raw_json: str) -> str:
-    """Convert the assistant‑returned JSON (analyses → steps) into Markdown."""
+    """Convert the assistant-returned plan JSON to readable Markdown."""
     try:
         data = json.loads(raw_json)
-        md_blocks = []
+        md = []
         for ana in data.get("analyses", []):
-            md_blocks.append(f"### {ana['title']}\n")
+            md.append(f"### {ana['title']}\n")
             for idx, step in enumerate(ana["steps"], 1):
-                md_blocks.append(f"{idx}. {step['step']}")
-            md_blocks.append("\n")
-        return "\n".join(md_blocks)
-    except Exception:
-        # fall back to raw text if parsing fails
-        return raw_json
+                md.append(f"{idx}. {step['step']}")
+            md.append("")                               # blank line
+        return "\n".join(md)
+    except Exception:                                  # noqa: BLE001
+        return raw_json                                # fallback
 
 
-
-def ensure_plan_keys(h):
+def ensure_plan_keys(h: Dict) -> Dict:
+    """Guarantee all plan-related keys exist for a hypothesis dict."""
     h.setdefault("analysis_plan_chat_history", [])
     h.setdefault("analysis_plan", "")
     h.setdefault("analysis_plan_accepted", False)
     return h
 
 
-# ── PAGE SETUP ---------------------------------------------------------------
+def _init_session_state() -> None:
+    """Add any keys this page expects."""
+    defaults = {
+        "current_hypothesis_idx": 0,
+        "all_plans_generated":    False,
+    }
+    for k, v in defaults.items():
+        st.session_state.setdefault(k, v)
 
-# Which hypothesis is in focus?
-current = st.session_state.get("current_hypothesis_idx", 0)
+# ═══════════════════════════  Main page  ══════════════════════════════════
+def main() -> None:
+    # ── page config & CSS ────────────────────────────────────────────────
+    init_state()                # MUST be first Streamlit call
+    add_green_button_css()
+    add_modern_font_css()
+    add_sidebar_button_styles()
+    _init_session_state()
 
-hypo_obj = ensure_plan_keys(
-    st.session_state.updated_hypotheses["assistant_response"][current]
-)
+    # ── pick the hypothesis in focus ─────────────────────────────────────
+    current = st.session_state["current_hypothesis_idx"]
+    hyps    = st.session_state.updated_hypotheses["assistant_response"]
+    hypo    = ensure_plan_keys(hyps[current])
 
-with st.sidebar:
-    st.header("Accepted hypotheses")
-    for idx, h in enumerate(st.session_state.updated_hypotheses["assistant_response"]):
-        label = f":heavy_check_mark: Hypothesis {idx+1}" if h.get("analysis_plan_accepted",None) else f"Hypothesis {idx+1}" 
-        title = label
-        with st.expander(title, expanded=(current == idx)):
-            st.markdown(h["final_hypothesis"], unsafe_allow_html=True)
-            if st.button("Work on this plan", key=f"select_hypo_{idx}"):
-                st.session_state["current_hypothesis_idx"] = idx
-                st.rerun()
-
-
-st.subheader(f"Analysis Plan Manager: Hypothesis {current+1}")
-st.markdown(hypo_obj["final_hypothesis"], unsafe_allow_html=True)
-
-# Plan generation / chat
-chat_hist = hypo_obj["analysis_plan_chat_history"]
-
-with st.sidebar:
-    st.header("Actions")
-    # button_label = "Generate plan" if not hypo_obj["analysis_plan_accepted"] else "Generate new plan"
-    button_label = "Generate plan" if not chat_hist else "Re-generate plan"
-    
-    if st.button(button_label, key="generate_plan"):
-        prompt = (
-            f"Here is the data summary: {st.session_state.data_summary}\n\n"
-            f"Here is the hypothesis: {hypo_obj['final_hypothesis']}"
-        )
-
-        prompt_str = "".join(prompt)
-
-        chat_hist.append({"role": "user", "content": prompt_str})
-
-        with st.spinner("Generating …"):
-            resp = client.responses.create(
-                model="gpt-4o",
-                temperature=0,
-                instructions=analyses_step_generation_instructions,
-                input=prompt_str,
-                stream=False,
-                tools=[{"type": "web_search_preview"}],
-                text=plan_generation_response_schema,
-                store=False,
-            )
-
-        # print(f"\n\nResponse from the plan generation response:\n\n{resp}")
-
-        chat_hist.append({"role": "assistant", "content": resp.output_text})
-
-        all_ready = all(
-            h.get("analysis_plan") and h.get("analysis_plan_accepted")
-            for h in st.session_state.updated_hypotheses["assistant_response"]
-        )
-
-        if all_ready:
-            st.info("Yu can now proceed to the PLAN EXECUTION stage.")
-            st.session_state.all_plans_generated = True
-            st.rerun()
-            
-        st.rerun()
-
-if not hypo_obj["analysis_plan_accepted"]:
-    
-    # Show existing chat
-    for m in chat_hist[1:]:
-        with st.chat_message(m["role"]):
-            if m["role"] == "assistant":
-                st.markdown(
-                    json.loads(m["content"])["assistant_response"], 
-                    unsafe_allow_html=True
-                )
-            elif m["role"] == "user":
-                st.write(m["content"])
-
-    user_msg = st.chat_input("Refine this analysis plan …")
-
-    if user_msg:
-        chat_hist.append({"role": "user", "content": user_msg})
-        
-        with st.spinner("Thinking …"):
-            resp = client.responses.create(
-                model="gpt-4o",
-                temperature=0,
-                instructions=analyses_step_chat_instructions,
-                input=chat_hist,
-                stream=False,
-                tools=[{"type": "web_search_preview"}],
-                text=plan_generation_response_schema,
-                store=False,
-            )
-        chat_hist.append({"role": "assistant", "content": resp.output_text})
-        st.rerun()
-
-    if chat_hist:
-        with st.sidebar:
-            if st.button("Accept this plan", key="accept_plan"):
-                hypo_obj["analysis_plan"] = chat_hist[-1]["content"]
-                hypo_obj["analysis_plan_accepted"] = True
-                st.rerun()
-
-if hypo_obj["analysis_plan_accepted"]:
-
-    raw_plan = hypo_obj["analysis_plan"]
-    plan_json = json.loads(raw_plan) if isinstance(raw_plan, str) else raw_plan
-    st.markdown(plan_json["assistant_response"], unsafe_allow_html=True)
-
+    # ══════════════════════  SIDEBAR  ════════════════════════════════════
     with st.sidebar:
-        if st.button("Edit plan", key="edit_plan"):
-            hypo_obj["analysis_plan_accepted"] = False
+        st.header("Accepted hypotheses")
+        for idx, h in enumerate(hyps):
+            label = (
+                f":heavy_check_mark: Hypothesis {idx+1}"
+                if h.get("analysis_plan_accepted")
+                else f"Hypothesis {idx+1}"
+            )
+            with st.expander(label, expanded=(idx == current)):
+                st.markdown(h["final_hypothesis"], unsafe_allow_html=True)
+                if st.button("Work on this plan", key=f"select_h_{idx}"):
+                    st.session_state["current_hypothesis_idx"] = idx
+                    st.rerun()
+
+    # ── main header ──────────────────────────────────────────────────────
+    st.subheader(f"Analysis-Plan Manager – Hypothesis {current+1}")
+    st.markdown(hypo["final_hypothesis"], unsafe_allow_html=True)
+
+    # ══════════════════════  SIDEBAR ACTIONS  ════════════════════════════
+    with st.sidebar:
+        st.header("Actions")
+
+        hist: List[Dict] = hypo["analysis_plan_chat_history"]
+        gen_label = "Generate plan" if not hist else "Re-generate plan"
+        if st.button(gen_label, key="generate_plan"):
+            prompt = (
+                f"Data summary: {st.session_state.data_summary}\n\n"
+                f"Hypothesis: {hypo['final_hypothesis']}"
+            )
+            hist.append({"role": "user", "content": prompt})
+
+            with st.spinner("Generating …"):
+                resp = client.responses.create(
+                    model="gpt-4o",
+                    temperature=0,
+                    instructions=analyses_step_generation_instructions,
+                    input=prompt,
+                    text=plan_generation_response_schema,
+                    tools=[{"type": "web_search_preview"}],
+                    stream=False,
+                    store=False,
+                )
+
+            hist.append({"role": "assistant", "content": resp.output_text})
             st.rerun()
-        if all(
-            h.get("analysis_plan") and h.get("analysis_plan_accepted")
-            for h in st.session_state.updated_hypotheses["assistant_response"]
-        ):
-            if st.button("NEXT STAGE", key="next_stage"):
+
+    # ══════════════════════  CHAT / EDIT LOOP  ════════════════════════════
+    if not hypo["analysis_plan_accepted"]:
+        # ─ existing chat messages ─
+        for m in hist[1:]:
+            with st.chat_message(m["role"]):
+                if m["role"] == "assistant":
+                    st.markdown(
+                        pretty_markdown_plan(json.loads(m["content"])["assistant_response"]),
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.write(m["content"])
+
+        # ─ user reply box ─
+        user_msg = st.chat_input("Refine this analysis plan …")
+        if user_msg:
+            hist.append({"role": "user", "content": user_msg})
+            with st.spinner("Thinking …"):
+                resp = client.responses.create(
+                    model="gpt-4o",
+                    temperature=0,
+                    instructions=analyses_step_chat_instructions,
+                    input=hist,
+                    text=plan_generation_response_schema,
+                    tools=[{"type": "web_search_preview"}],
+                    stream=False,
+                    store=False,
+                )
+            hist.append({"role": "assistant", "content": resp.output_text})
+            st.rerun()
+
+        # ─ accept button ─
+        if hist:
+            with st.sidebar:
+                if st.button("Accept this plan", key="accept_plan"):
+                    hypo["analysis_plan"]          = hist[-1]["content"]
+                    hypo["analysis_plan_accepted"] = True
+
+                    # ▶︎ NEW: check all hypotheses and set the flag
+                    all_ready = all(
+                        h.get("analysis_plan") and h.get("analysis_plan_accepted")
+                        for h in st.session_state.updated_hypotheses["assistant_response"]
+                    )
+                    if all_ready:
+                        st.session_state.all_plans_generated = True
+
+                    st.rerun()
+
+    # ══════════════════════  ACCEPTED PLAN VIEW  ══════════════════════════
+    if hypo["analysis_plan_accepted"]:
+        raw   = hypo["analysis_plan"]
+        md    = pretty_markdown_plan(raw if isinstance(raw, str) else json.dumps(raw))
+        st.markdown(md, unsafe_allow_html=True)
+
+        with st.sidebar:
+            if st.button("Edit plan"):
+                hypo["analysis_plan_accepted"] = False
+                st.rerun()
+
+            all_ready = all(
+                h.get("analysis_plan") and h.get("analysis_plan_accepted")
+                for h in hyps
+            )
+            if all_ready and st.button("NEXT STAGE", type="primary"):
                 st.switch_page("pages/05_Plan_execution.py")
 
-    # col_back, col_next = st.columns(2)
-    # with col_next:
-    #     if st.button("Next", key="next"):
-    #         st.switch_page("pages/05_Plan_execution.py")
-    # with col_back:
-    #     if st.button("Back", key="back"):
-    #         st.switch_page("pages/03_Hypotheses_manager.py")
+# ───────────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    main()

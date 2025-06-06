@@ -7,8 +7,8 @@ st.set_page_config(
     layout="wide",
 )
 
-from utils import init_state, add_green_button_css
-init_state(); add_green_button_css()
+from utils import init_state, add_green_button_css, add_modern_font_css
+init_state(); add_green_button_css(); add_modern_font_css()
 
 # # page lablels
 # home = st.Page("app.py"),
@@ -25,7 +25,7 @@ init_state(); add_green_button_css()
 upload = st.Page("pages/01_Upload.py", icon="✔️") if bool(st.session_state.data_uploaded and st.session_state.hypotheses_uploaded) else st.Page("pages/01_Upload.py")
 processing = st.Page("pages/02_Processing_files.py", icon="✔️") if st.session_state.processing_done else st.Page("pages/02_Processing_files.py")
 hypotheses_manager = st.Page("pages/03_Hypotheses_manager.py", icon="✔️") if st.session_state.all_hypotheses_accepted else st.Page("pages/03_Hypotheses_manager.py")
-plan_manager = st.Page("pages/04_Plan_manager.py", icon="✔️") if st.session_state.all_plans_generated else st.Page("pages/04_Plan_manager.py")
+plan_manager = st.Page("pages/04_Plan_manager.py", icon="✅") if st.session_state.all_plans_generated else st.Page("pages/04_Plan_manager.py")
 plan_execution = st.Page("pages/05_Plan_execution.py", icon="✔️") if st.session_state.all_plans_executed else st.Page("pages/05_Plan_execution.py")
 report_builder = st.Page("pages/06_Report_builder.py", icon="✔️") if st.session_state.report_generated else st.Page("pages/06_Report_builder.py")
 

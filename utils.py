@@ -133,6 +133,13 @@ def add_green_button_css() -> None:
         unsafe_allow_html=True,
     )
 
+def add_modern_font_css() -> None:
+    st.markdown(
+        """<style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+            html, body, [class*='css'] {font-family: 'Inter', sans-serif !important;}
+        </style>""", unsafe_allow_html=True)
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # SESSION-STATE MANAGEMENT
@@ -150,6 +157,7 @@ DEFAULT_STATE: Dict[str, Any] = dict(
     images=[],              # list[{"image_path":Path,"file_id":str,"html":str}]
     # data & hypothesis content
     hypotheses="",          # raw txt from upload
+    hypotheses_text="",
     data_summary="",        # dict from DataSummary assistant
     updated_hypotheses={},  # refined list incl. chat logs
     all_hypotheses_accepted = False,
